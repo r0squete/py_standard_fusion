@@ -16,9 +16,9 @@ Functions:
 
 Notes:
     - Stability guards and degenerate cases:
-        * If Var(template) <= VAR_EPS (default 1e-10): a=0; b=X puntual; rho=0; err=0.
+        * If Var(template) <= VAR_EPS (default 1e-4): a=0; b=X puntual; rho=0; err=0.
         * If Var(L3) is tiny and Var(template) is not: rho=1 so that err=0.
-        * Pixels with insufficient local support (Nev < NEV_MIN_FRAC*sum(kernel)) are set to NaN.
+        * Pixels with insufficient local support (Nev < NEV_MIN_FRAC*sum(kernel)) preserve L3 original values.
     - Numerical tolerances: TOL=1e-20 for masks/denominators; VAR_EPS and NEV_MIN_FRAC are
       module-level constants and can be adjusted if needed.
     - log_mode in {'none','L3','template','both'}: logs are applied before fusion and, if L3 is logged,
@@ -36,16 +36,16 @@ Example usage:
                                       mask_mode='L3', log_mode='both')
 """
 
-# Constants
-TOL = 1e-20  # Generic numerical tolerance used for masks/denominators
-VAR_EPS = 1e-10  # Threshold for "tiny" variance
-NEV_MIN_FRAC = 0.2  # Minimum fraction of kernel support required for a valid estimate
-
-
 # Libraries
 import logging
+
 import numpy as np
 from scipy.signal import fftconvolve
+
+# Constants
+TOL = 1e-20  # Generic numerical tolerance used for masks/denominators
+VAR_EPS = 1e-4  # Threshold for "tiny" variance
+NEV_MIN_FRAC = 0.2  # Minimum fraction of kernel support required for a valid estimate
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def euklid_invW(shape, width=1, exponent=2.0):
     Generate a kernel of inverse Euclidean distance weights.
     Args:
         shape: tuple, kernel size (ny, nx)
-        width: int, semi-width (SCOPE) in pixels 
+        width: int, semi-width (SCOPE) in pixels
         exponent: float, power law exponent (default 2.0)
     Returns:
         kernel: np.ndarray
@@ -71,7 +71,7 @@ def euklid_invW(shape, width=1, exponent=2.0):
     support[cy, cx] = False  # zero weight at center
     dist = np.sqrt((y - cy) ** 2 + (x - cx) ** 2)
     kernel = np.zeros((ny, nx), dtype=float)
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         kernel[support] = 1.0 / (dist[support] ** exponent)
     return kernel
 
@@ -80,9 +80,9 @@ def fusion(
     L3,
     template,
     kernel,
-    mask_mode='L3',
-    log_mode='none',
-    boundary='zero',
+    mask_mode="L3",
+    log_mode="none",
+    boundary="zero",
     debug=False,
 ):
     """
@@ -104,38 +104,41 @@ def fusion(
     """
 
     # Optionally log-transform inputs
-    if log_mode not in ('none', 'L3', 'template', 'both'):
+    if log_mode not in ("none", "L3", "template", "both"):
         raise ValueError("log_mode must be one of: 'none','L3','template','both'")
-    if log_mode in ('L3', 'both'):
+    if log_mode in ("L3", "both"):
         L3 = np.log10(np.where(L3 > 0, L3, np.nan))
-    if log_mode in ('template', 'both'):
+    if log_mode in ("template", "both"):
         template = np.log10(np.where(template > 0, template, np.nan))
 
     # Support 2D or 3D stacks by operating per 2D slice
     L3 = np.asarray(L3)
     template = np.asarray(template)
     if L3.shape != template.shape:
-        raise ValueError('L3 and template must have the same shape')
+        raise ValueError("L3 and template must have the same shape")
 
-    if boundary not in ('zero', 'reflect'):
+    if boundary not in ("zero", "reflect"):
         raise ValueError("boundary must be one of: 'zero','reflect'")
 
     # Convolution helper (linear 'same' semantics with configurable boundary)
-    if boundary == 'zero':
+    if boundary == "zero":
+
         def conv_same(a2d: np.ndarray) -> np.ndarray:
-            return fftconvolve(a2d, kernel, mode='same')
+            return fftconvolve(a2d, kernel, mode="same")
     else:
         pad_y = kernel.shape[0] // 2
         pad_x = kernel.shape[1] // 2
 
         def conv_same(a2d: np.ndarray) -> np.ndarray:
             if pad_y == 0 and pad_x == 0:
-                return fftconvolve(a2d, kernel, mode='same')
-            padded = np.pad(a2d, ((pad_y, pad_y), (pad_x, pad_x)), mode='reflect')
-            return fftconvolve(padded, kernel, mode='valid')
+                return fftconvolve(a2d, kernel, mode="same")
+            padded = np.pad(a2d, ((pad_y, pad_y), (pad_x, pad_x)), mode="reflect")
+            return fftconvolve(padded, kernel, mode="valid")
 
     # Precompute constants used inside each slice
-    ksum = float(np.sum(kernel)) if np.isfinite(kernel).all() else float(np.nansum(kernel))
+    ksum = (
+        float(np.sum(kernel)) if np.isfinite(kernel).all() else float(np.nansum(kernel))
+    )
     min_support = NEV_MIN_FRAC * ksum
 
     def _process_slice(L3_2d: np.ndarray, T_2d: np.ndarray):
@@ -164,7 +167,7 @@ def fusion(
         VAR_template = T_m2 - (T_m * T_m)
 
         # Regression with safeguards
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             AA = COVAR / VAR_template
             BB = L3_m - (AA * T_m)
             denom = np.sqrt(np.maximum(VAR_L3 * VAR_template, 0.0))
@@ -176,16 +179,17 @@ def fusion(
         varT_small = VAR_template <= VAR_EPS
         varL3_small = VAR_L3 <= VAR_EPS
 
-        # Where no neighbors → NaN
-        for arr in (AA, BB, RR):
-            arr[no_neighbors] = np.nan
+        # Where no neighbors → preserve L3 original values
+        AA[no_neighbors] = 0.0
+        BB[no_neighbors] = L3_2d[no_neighbors]
+        RR[no_neighbors] = 0.0
 
-        # If VAR(T) small: AA=0; BB=X puntual; RR=0  
+        # If VAR(T) small: AA=0; BB=X puntual; RR=0
         AA[varT_small] = 0.0
         BB[varT_small] = L3_2d[varT_small]
         RR[varT_small] = 0.0
 
-        # If VAR(L3) tiny and VAR(T) is not tiny: set RR=1 
+        # If VAR(L3) tiny and VAR(T) is not tiny: set RR=1
         RR[np.logical_and(varL3_small, ~varT_small)] = 1.0
 
         # Error: std of residuals
@@ -193,18 +197,18 @@ def fusion(
         ERR[ERR < 0] = 0
         ERR = np.sqrt(ERR)
 
-        # In VAR(T) small branch error is exactly 0 
+        # In VAR(T) small branch error is exactly 0
         ERR[varT_small] = 0.0
 
         # L4 prediction in original (possibly log) space
         L4 = AA * T_2d + BB
 
         # Output mask
-        if mask_mode == 'template':
+        if mask_mode == "template":
             mask_out = mask_template >= 0.5
-        elif mask_mode == 'L3':
+        elif mask_mode == "L3":
             mask_out = mask_L3 >= 0.5
-        elif mask_mode == 'both':
+        elif mask_mode == "both":
             mask_out = mask_merged
         else:
             raise ValueError('mask_mode must be "template", "L3" or "both"')
@@ -213,10 +217,10 @@ def fusion(
 
         # Return arrays and rare-case counters for optional debug
         counts = (
-            int(np.sum(no_neighbors)),           # no_neighbors
-            int(np.sum(varT_small)),             # varT_small
-            int(np.sum(varL3_small)),            # varL3_small
-            int(L3_2d.size),                     # total pixels
+            int(np.sum(no_neighbors)),  # no_neighbors
+            int(np.sum(varT_small)),  # varT_small
+            int(np.sum(varL3_small)),  # varL3_small
+            int(L3_2d.size),  # total pixels
         )
         return L4, AA, BB, RR, ERR, counts
 
@@ -227,7 +231,10 @@ def fusion(
     if L3.ndim == 2:
         L4, AA, BB, RR, ERR, counts = _process_slice(L3, template)
         c_no, c_vt, c_vx, c_N = counts
-        total_no_neighbors += c_no; total_varT_small += c_vt; total_varL3_small += c_vx; total_npix += c_N
+        total_no_neighbors += c_no
+        total_varT_small += c_vt
+        total_varL3_small += c_vx
+        total_npix += c_N
     elif L3.ndim == 3:
         nt = L3.shape[0]
         L4 = np.empty_like(L3, dtype=float)
@@ -236,30 +243,45 @@ def fusion(
         RR = np.empty_like(L3, dtype=float)
         ERR = np.empty_like(L3, dtype=float)
         for it in range(nt):
-            L4[it], AA[it], BB[it], RR[it], ERR[it], counts = _process_slice(L3[it], template[it])
+            L4[it], AA[it], BB[it], RR[it], ERR[it], counts = _process_slice(
+                L3[it], template[it]
+            )
             c_no, c_vt, c_vx, c_N = counts
-            total_no_neighbors += c_no; total_varT_small += c_vt; total_varL3_small += c_vx; total_npix += c_N
+            total_no_neighbors += c_no
+            total_varT_small += c_vt
+            total_varL3_small += c_vx
+            total_npix += c_N
     else:
-        raise ValueError('L3 and template must be 2D or 3D arrays')
+        raise ValueError("L3 and template must be 2D or 3D arrays")
 
     # Optionally exponentiate output if L3 was log-transformed
-    if log_mode in ('L3', 'both'):
-        L4 = 10 ** L4
+    if log_mode in ("L3", "both"):
+        L4 = 10**L4
 
     if debug and total_npix > 0:
         try:
+
             def _rng(a):
-                v = np.asarray(a); finite = np.isfinite(v)
+                v = np.asarray(a)
+                finite = np.isfinite(v)
                 if not finite.any():
                     return (np.nan, np.nan)
                 vv = v[finite]
                 return (float(vv.min()), float(vv.max()))
+
             p_no = 100.0 * total_no_neighbors / total_npix
             p_vt = 100.0 * total_varT_small / total_npix
             p_vx = 100.0 * total_varL3_small / total_npix
-            l4min, l4max = _rng(L4); amin, amax = _rng(AA); rmin, rmax = _rng(RR); _, emax = _rng(ERR)
-            logger.info(f"[fusion] rare-cases: no_neighbors={p_no:.2f}% varT_small={p_vt:.2f}% varL3_small={p_vx:.2f}%")
-            logger.info(f"[fusion] ranges L4[{l4min:.6g},{l4max:.6g}] a[{amin:.6g},{amax:.6g}] rho[{rmin:.6g},{rmax:.6g}] err_max={emax:.6g}")
+            l4min, l4max = _rng(L4)
+            amin, amax = _rng(AA)
+            rmin, rmax = _rng(RR)
+            _, emax = _rng(ERR)
+            logger.info(
+                f"[fusion] rare-cases: no_neighbors={p_no:.2f}% varT_small={p_vt:.2f}% varL3_small={p_vx:.2f}%"
+            )
+            logger.info(
+                f"[fusion] ranges L4[{l4min:.6g},{l4max:.6g}] a[{amin:.6g},{amax:.6g}] rho[{rmin:.6g},{rmax:.6g}] err_max={emax:.6g}"
+            )
         except Exception:
             logger.debug("[fusion] debug summary failed", exc_info=True)
 

@@ -32,8 +32,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
-from py_fusion.config import make_dims, make_params, make_vars, make_io, nc_encoding
-from py_fusion.fusion_xr import build_kernel, fusion_xr
+from .config import make_dims, make_params, make_vars, make_io, nc_encoding
+from .fusion_xr import build_kernel, fusion_xr
 
 # Module logger
 logger = logging.getLogger(__name__)
