@@ -32,7 +32,7 @@ python -m py_code.cli_fusion \
     --l3 /path/to/L3.nc --l3-var L3_variable_name \
     --template /path/to/template.nc --template-var template_variable_name \
     --width 20 --exponent 2 \
-    --mask-mode L3 --log-mode none --boundary reflect \
+    --log-mode none --boundary reflect \
     --output fused_output.nc --verbose
 ```
 Key behaviour:
