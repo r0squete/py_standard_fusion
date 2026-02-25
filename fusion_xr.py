@@ -16,18 +16,25 @@ Functions:
 
 # Libraries
 import logging
-from typing import Dict, Any
+from typing import Any, Dict
+
 import numpy as np
 import xarray as xr
+
 from .fusion import euklid_invW, fusion
 
 # Module logger
 logger = logging.getLogger(__name__)
 
+
 # Functions
 def build_kernel(params: Dict[str, Any]) -> np.ndarray:
     size = 2 * int(params["width"]) + 1
-    return euklid_invW((size, size), width=int(params["width"]), exponent=float(params.get("exponent", 2.0)))
+    return euklid_invW(
+        (size, size),
+        width=int(params["width"]),
+        exponent=float(params.get("exponent", 2.0)),
+    )
 
 
 def _order_dims(da: "xr.DataArray", params: Dict[str, Any]) -> "xr.DataArray":
@@ -58,7 +65,9 @@ def fusion_xr(
     da_L3o = _order_dims(da_L3, params)
     da_To = _order_dims(da_T, params)
     if da_L3o.shape != da_To.shape:
-        raise ValueError("L3 and template arrays must match in shape after reordering dims")
+        raise ValueError(
+            "L3 and template arrays must match in shape after reordering dims"
+        )
 
     # Kernel is provided by the caller (built once in the CLI)
     ker = kernel
@@ -77,14 +86,19 @@ def fusion_xr(
         has_t = dims["time"] in da_L3o.dims
         if has_t:
             nt = da_L3o.sizes[dims["time"]]
-            logger.info(f"[fusion_xr] Running fusion on 3D stack: nt={nt}, ny={da_L3o.sizes[dims['y']]}, nx={da_L3o.sizes[dims['x']]}...")
+            logger.info(
+                f"[fusion_xr] Running fusion on 3D stack: nt={nt}, ny={da_L3o.sizes[dims['y']]}, nx={da_L3o.sizes[dims['x']]}..."
+            )
         else:
-            logger.info(f"[fusion_xr] Running fusion on 2D field: ny={da_L3o.sizes[dims['y']]}, nx={da_L3o.sizes[dims['x']]}...")
+            logger.info(
+                f"[fusion_xr] Running fusion on 2D field: ny={da_L3o.sizes[dims['y']]}, nx={da_L3o.sizes[dims['x']]}..."
+            )
+
+    # Run core fusion
     L4, AA, BB, RR, ERR = fusion(
         da_L3o.data,
         da_To.data,
         ker,
-        mask_mode=str(params.get("mask_mode", "L3")),
         log_mode=str(params.get("log_mode", "none")),
         boundary=str(params.get("boundary", "zero")),
         debug=bool(params.get("verbose", False)),
@@ -101,13 +115,13 @@ def fusion_xr(
     da_ERR = xr.DataArray(ERR, coords=coords, dims=dims, name="err")
 
     # Optionally set minimal metadata
-    if hasattr(da_L3o, 'attrs'):
-        if 'units' in da_L3o.attrs:
-            da_L4.attrs['units'] = da_L3o.attrs['units']
-    da_AA.attrs['long_name'] = 'local_slope'
-    da_BB.attrs['long_name'] = 'local_intercept'
-    da_RR.attrs['long_name'] = 'local_correlation'
-    da_ERR.attrs['long_name'] = 'local_error_std'
+    if hasattr(da_L3o, "attrs"):
+        if "units" in da_L3o.attrs:
+            da_L4.attrs["units"] = da_L3o.attrs["units"]
+    da_AA.attrs["long_name"] = "local_slope"
+    da_BB.attrs["long_name"] = "local_intercept"
+    da_RR.attrs["long_name"] = "local_correlation"
+    da_ERR.attrs["long_name"] = "local_error_std"
 
     ds = xr.Dataset({"L4": da_L4, "a": da_AA, "b": da_BB, "rho": da_RR, "err": da_ERR})
 

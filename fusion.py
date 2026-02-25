@@ -203,17 +203,8 @@ def fusion(
         # L4 prediction in original (possibly log) space
         L4 = AA * T_2d + BB
 
-        # Output mask
-        if mask_mode == "template":
-            mask_out = mask_template >= 0.5
-        elif mask_mode == "L3":
-            mask_out = mask_L3 >= 0.5
-        elif mask_mode == "both":
-            mask_out = mask_merged
-        else:
-            raise ValueError('mask_mode must be "template", "L3" or "both"')
-        for arr in (L4, AA, BB, RR, ERR):
-            arr[~mask_out] = np.nan
+        # Preserve L3 original values where L4 is NaN but L3 is not (e.g., due to no neighbors or tiny VAR(T))
+        L4[np.isnan(L4) & ~np.isnan(L3_2d)] = L3_2d[np.isnan(L4) & ~np.isnan(L3_2d)]
 
         # Return arrays and rare-case counters for optional debug
         counts = (

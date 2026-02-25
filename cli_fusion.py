@@ -9,7 +9,7 @@ Usage (repository root):
       --l3 path_to_L3.nc --l3-var L3_varname \
       --template path_to_template.nc --template-var T_varname \
       --width 20 --exponent 2 \
-      --mask-mode L3 --log-mode none --boundary zero \
+      --log-mode none --boundary zero \
       --output "/out_dir/fused_{date}.nc"
 
   python -m py_code.cli_fusion \
@@ -29,10 +29,12 @@ import argparse
 import glob
 import logging
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import xarray as xr
-from .config import make_dims, make_params, make_vars, make_io, nc_encoding
+
+from .config import make_dims, make_io, make_params, make_vars, nc_encoding
 from .fusion_xr import build_kernel, fusion_xr
 
 # Module logger
@@ -40,29 +42,72 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Run fusion on NetCDF inputs (xarray-based)")
-    p.add_argument("--l3", required=True, dest="l3_globs", nargs='+',
-                   help="One or more file paths or glob patterns for L3 inputs")
+    p = argparse.ArgumentParser(
+        description="Run fusion on NetCDF inputs (xarray-based)"
+    )
+    p.add_argument(
+        "--l3",
+        required=True,
+        dest="l3_globs",
+        nargs="+",
+        help="One or more file paths or glob patterns for L3 inputs",
+    )
     p.add_argument("--l3-var", required=True, dest="l3_var")
-    p.add_argument("--template", required=True, dest="template_globs", nargs='+',
-                   help="One or more file paths or glob patterns for template inputs")
+    p.add_argument(
+        "--template",
+        required=True,
+        dest="template_globs",
+        nargs="+",
+        help="One or more file paths or glob patterns for template inputs",
+    )
     p.add_argument("--template-var", required=True, dest="template_var")
-    p.add_argument("--width", type=int, default=20,
-                   help="SCOPE semi-width in pixels (default: 20)")
-    p.add_argument("--exponent", type=float, default=2.0,
-                   help="Power-law exponent (default: 2.0)")
-    p.add_argument("--mask-mode", choices=["L3", "template", "both"], default="L3")
-    p.add_argument("--log-mode", choices=["none", "L3", "template", "both"], default="none")
-    p.add_argument("--boundary", choices=["zero", "reflect"], default="zero",
-                   help="Boundary handling for convolutions (default: zero padding)")
-    p.add_argument("--l3-time-dim", default=None, help="L3 time dim name (mapped to 'time'; default: time)")
-    p.add_argument("--l3-y-dim", default=None, help="L3 Y dim name (mapped to 'lat'; default: lat)")
-    p.add_argument("--l3-x-dim", default=None, help="L3 X dim name (mapped to 'lon'; default: lon)")
-    p.add_argument("--t-time-dim", default=None, help="Template time dim name (mapped to 'time'; default: time)")
-    p.add_argument("--t-y-dim", default=None, help="Template Y dim name (mapped to 'lat'; default: lat)")
-    p.add_argument("--t-x-dim", default=None, help="Template X dim name (mapped to 'lon'; default: lon)")
-    p.add_argument("--output", required=True, dest="output_path",
-                   help="Output path pattern; available placeholders: {index}, {date}, {l3_name}, {template_name}")
+    p.add_argument(
+        "--width", type=int, default=20, help="SCOPE semi-width in pixels (default: 20)"
+    )
+    p.add_argument(
+        "--exponent", type=float, default=2.0, help="Power-law exponent (default: 2.0)"
+    )
+    p.add_argument(
+        "--log-mode", choices=["none", "L3", "template", "both"], default="none"
+    )
+    p.add_argument(
+        "--boundary",
+        choices=["zero", "reflect"],
+        default="zero",
+        help="Boundary handling for convolutions (default: zero padding)",
+    )
+    p.add_argument(
+        "--l3-time-dim",
+        default=None,
+        help="L3 time dim name (mapped to 'time'; default: time)",
+    )
+    p.add_argument(
+        "--l3-y-dim", default=None, help="L3 Y dim name (mapped to 'lat'; default: lat)"
+    )
+    p.add_argument(
+        "--l3-x-dim", default=None, help="L3 X dim name (mapped to 'lon'; default: lon)"
+    )
+    p.add_argument(
+        "--t-time-dim",
+        default=None,
+        help="Template time dim name (mapped to 'time'; default: time)",
+    )
+    p.add_argument(
+        "--t-y-dim",
+        default=None,
+        help="Template Y dim name (mapped to 'lat'; default: lat)",
+    )
+    p.add_argument(
+        "--t-x-dim",
+        default=None,
+        help="Template X dim name (mapped to 'lon'; default: lon)",
+    )
+    p.add_argument(
+        "--output",
+        required=True,
+        dest="output_path",
+        help="Output path pattern; available placeholders: {index}, {date}, {l3_name}, {template_name}",
+    )
     p.add_argument("--no-zlib", action="store_true")
     p.add_argument("--complevel", type=int, default=4)
     p.add_argument("--verbose", action="store_true", help="Print progress information")
@@ -74,20 +119,30 @@ def main(argv=None):
 
     # Configure logging for library modules (fusion), controlled by --verbose
     if args.verbose:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+        logging.basicConfig(
+            level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+        )
     else:
         logging.basicConfig(level=logging.WARNING)
 
     # Canonical names are fixed internally: time/lat/lon
     dims = make_dims(time="time", y="lat", x="lon")
-    params = make_params(width=args.width, exponent=args.exponent,
-                         mask_mode=args.mask_mode, log_mode=args.log_mode,
-                         boundary=args.boundary,
-                         dims=dims, verbose=args.verbose)
+    params = make_params(
+        width=args.width,
+        exponent=args.exponent,
+        log_mode=args.log_mode,
+        boundary=args.boundary,
+        dims=dims,
+        verbose=args.verbose,
+    )
     vars_cfg = make_vars(l3_var=args.l3_var, template_var=args.template_var)
-    io_cfg = make_io(l3_path="", template_path="",
-                     output_path=args.output_path, zlib=(not args.no_zlib),
-                     complevel=args.complevel)
+    io_cfg = make_io(
+        l3_path="",
+        template_path="",
+        output_path=args.output_path,
+        zlib=(not args.no_zlib),
+        complevel=args.complevel,
+    )
 
     # Expand globs
     def expand_many(patterns):
@@ -105,7 +160,9 @@ def main(argv=None):
     if not t_files:
         raise FileNotFoundError("No template files matched the provided patterns")
     if len(l3_files) != len(t_files):
-        raise ValueError(f"Number of L3 files ({len(l3_files)}) does not match template files ({len(t_files)})")
+        raise ValueError(
+            f"Number of L3 files ({len(l3_files)}) does not match template files ({len(t_files)})"
+        )
 
     # Preprocess: keep only target var (coords/dims are preserved)
     def _pp_l3(ds):
@@ -115,7 +172,9 @@ def main(argv=None):
 
     def _pp_t(ds):
         if args.template_var not in ds:
-            raise KeyError(f"Template var '{args.template_var}' not found in one of the files")
+            raise KeyError(
+                f"Template var '{args.template_var}' not found in one of the files"
+            )
         return ds[[args.template_var]]
 
     # Resolve per-dataset dim names (fallback to canonical)
@@ -123,9 +182,9 @@ def main(argv=None):
     l3_t = args.l3_time_dim
     l3_y = args.l3_y_dim
     l3_x = args.l3_x_dim
-    t_t  = args.t_time_dim
-    t_y  = args.t_y_dim
-    t_x  = args.t_x_dim
+    t_t = args.t_time_dim
+    t_y = args.t_y_dim
+    t_x = args.t_x_dim
 
     # Helper to rename dims/coords to canonical names if needed
     def _rename_to_canon(ds, src_t, src_y, src_x, label):
@@ -138,24 +197,39 @@ def main(argv=None):
             mapping[src_x] = canon_x
         if mapping:
             if args.verbose:
-                logger.info(f"[cli] Renaming {label} dims {mapping} -> canon ({canon_t},{canon_y},{canon_x})")
+                logger.info(
+                    f"[cli] Renaming {label} dims {mapping} -> canon ({canon_t},{canon_y},{canon_x})"
+                )
             # Only include keys that exist to avoid xarray rename errors
-            mapping = {k: v for k, v in mapping.items() if (k in ds.dims or k in ds.coords or k in ds.variables)}
+            mapping = {
+                k: v
+                for k, v in mapping.items()
+                if (k in ds.dims or k in ds.coords or k in ds.variables)
+            }
             ds = ds.rename(mapping)
         return ds
 
     # Ensure rectilinear 1D coords if provided as 2D (tolerate 1D/2D representations)
     def _rectilinearize(ds, label):
-        if "lat" in ds.coords and getattr(ds["lat"], "ndim", 1) == 2 and "lon" in ds.coords and ds["lon"].ndim == 2:
+        if (
+            "lat" in ds.coords
+            and getattr(ds["lat"], "ndim", 1) == 2
+            and "lon" in ds.coords
+            and ds["lon"].ndim == 2
+        ):
             if args.verbose:
-                logger.info(f"[cli] {label}: converting 2D lat/lon coords to 1D axes (rectilinear check)")
+                logger.info(
+                    f"[cli] {label}: converting 2D lat/lon coords to 1D axes (rectilinear check)"
+                )
             lat2d = ds["lat"].values
             lon2d = ds["lon"].values
             # Check rectilinear: lon varies along X only, lat along Y only (tolerant)
             ok_lon = np.allclose(lon2d, lon2d[0:1, :], atol=1e-2, rtol=0.0)
             ok_lat = np.allclose(lat2d, lat2d[:, 0:1], atol=1e-2, rtol=0.0)
             if not (ok_lon and ok_lat):
-                raise ValueError(f"[{label}] non-rectilinear 2D lat/lon; please regrid to rectilinear grid")
+                raise ValueError(
+                    f"[{label}] non-rectilinear 2D lat/lon; please regrid to rectilinear grid"
+                )
             lat1d = lat2d[:, 0]
             lon1d = lon2d[0, :]
             ds = ds.assign_coords(lat=("lat", lat1d), lon=("lon", lon1d))
@@ -194,14 +268,20 @@ def main(argv=None):
 
     # Build kernel once; reuse for every pair
     if args.verbose:
-        logger.info(f"[cli] Building kernel with width={params['width']} exponent={params['exponent']}...")
+        logger.info(
+            f"[cli] Building kernel with width={params['width']} exponent={params['exponent']}..."
+        )
     kernel = build_kernel(params)
 
     # Prepare output pattern
     output_template = Path(io_cfg["output_path"])
     if output_template.name == "":
-        raise ValueError("--output must include a filename or pattern (not just a directory path)")
-    out_dir = output_template.parent if output_template.parent != Path("") else Path(".")
+        raise ValueError(
+            "--output must include a filename or pattern (not just a directory path)"
+        )
+    out_dir = (
+        output_template.parent if output_template.parent != Path("") else Path(".")
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     pattern_name = output_template.name
     available_keys = ("index", "date", "l3_name", "template_name")
@@ -221,7 +301,9 @@ def main(argv=None):
     total_pairs = len(l3_files)
     for idx, (l3_path, t_path) in enumerate(zip(l3_files, t_files), start=1):
         if args.verbose:
-            logger.info(f"[cli] Processing pair {idx}/{total_pairs}: L3='{l3_path}' | Template='{t_path}'")
+            logger.info(
+                f"[cli] Processing pair {idx}/{total_pairs}: L3='{l3_path}' | Template='{t_path}'"
+            )
         with xr.open_dataset(l3_path) as ds_L3_raw, xr.open_dataset(t_path) as ds_T_raw:
             ds_L3 = _pp_l3(ds_L3_raw)
             ds_T = _pp_t(ds_T_raw)
@@ -238,16 +320,25 @@ def main(argv=None):
             for name, da in (("L3", da_L3), ("template", da_T)):
                 for dim in (tdim, ydim, xdim):
                     if dim not in da.dims:
-                        raise ValueError(f"[{name}] missing required dim '{dim}' in variable '{da.name}'")
+                        raise ValueError(
+                            f"[{name}] missing required dim '{dim}' in variable '{da.name}'"
+                        )
 
             lat_L3 = _get_coord(da_L3.to_dataset(name="_tmp"), ydim)
             lon_L3 = _get_coord(da_L3.to_dataset(name="_tmp"), xdim)
             lat_T = _get_coord(da_T.to_dataset(name="_tmp"), ydim)
             lon_T = _get_coord(da_T.to_dataset(name="_tmp"), xdim)
             if lat_L3.shape != lat_T.shape or lon_L3.shape != lon_T.shape:
-                raise ValueError("Latitude/Longitude shapes differ between L3 and template")
-            if not (np.allclose(lat_L3, lat_T, atol=1e-2, rtol=0.0) and np.allclose(lon_L3, lon_T, atol=1e-2, rtol=0.0)):
-                raise ValueError("Latitude/Longitude coordinate values differ between L3 and template")
+                raise ValueError(
+                    "Latitude/Longitude shapes differ between L3 and template"
+                )
+            if not (
+                np.allclose(lat_L3, lat_T, atol=1e-2, rtol=0.0)
+                and np.allclose(lon_L3, lon_T, atol=1e-2, rtol=0.0)
+            ):
+                raise ValueError(
+                    "Latitude/Longitude coordinate values differ between L3 and template"
+                )
 
             time_idx_L3 = _normalize_time_index(ds_L3, tdim)
             time_idx_T = _normalize_time_index(ds_T, tdim)
@@ -269,10 +360,15 @@ def main(argv=None):
             else:
                 common_times = pd.Index(sorted(common_times))
 
-            if (len(common_times) != len(time_idx_L3) or len(common_times) != len(time_idx_T)) and args.verbose:
+            if (
+                len(common_times) != len(time_idx_L3)
+                or len(common_times) != len(time_idx_T)
+            ) and args.verbose:
                 logger.info(
                     "[cli] Aligning time axes: L3=%d, template=%d, common=%d",
-                    len(time_idx_L3), len(time_idx_T), len(common_times),
+                    len(time_idx_L3),
+                    len(time_idx_T),
+                    len(common_times),
                 )
 
             da_L3 = ds_L3.reindex({tdim: common_times})[vars_cfg["l3_var"]]
@@ -285,9 +381,13 @@ def main(argv=None):
                 has_t = dims["time"] in da_L3.dims
                 if has_t:
                     nt = da_L3.sizes[dims["time"]]
-                    logger.info(f"[cli] Running fusion on 3D stack: nt={nt}, ny={da_L3.sizes[dims['y']]}, nx={da_L3.sizes[dims['x']]}...")
+                    logger.info(
+                        f"[cli] Running fusion on 3D stack: nt={nt}, ny={da_L3.sizes[dims['y']]}, nx={da_L3.sizes[dims['x']]}..."
+                    )
                 else:
-                    logger.info(f"[cli] Running fusion on 2D field: ny={da_L3.sizes[dims['y']]}, nx={da_L3.sizes[dims['x']]}...")
+                    logger.info(
+                        f"[cli] Running fusion on 2D field: ny={da_L3.sizes[dims['y']]}, nx={da_L3.sizes[dims['x']]}..."
+                    )
             out = fusion_xr(da_L3, da_T, params, kernel=kernel)
 
             date_label = _format_date(aligned_times)
@@ -321,5 +421,5 @@ def main(argv=None):
         logger.info(f"[cli] Generated {len(saved_paths)} output files.")
 
 
-if __name__ == "__main__":  
+if __name__ == "__main__":
     raise SystemExit(main())
